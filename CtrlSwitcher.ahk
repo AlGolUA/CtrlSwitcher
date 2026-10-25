@@ -468,7 +468,7 @@ PlayLetterSound(char)
 
     ; SND_FILENAME | SND_ASYNC | SND_NODEFAULT: не задерживаем ввод
     ; и не заменяем отсутствующий файл системным звуком.
-    if (soundFile != "")
+    if (soundFile != "" && FileExist(soundFile))
         DllCall("winmm\PlaySoundW", "Str", soundFile, "Ptr", 0, "UInt", 0x00020003)
 }
 
@@ -620,11 +620,14 @@ DrawLanguage(langId)
     {
         flags := 0x00020001
         if (langId = ID_ENG && SOUND_ENG_FILE != "")
-            DllCall("winmm\PlaySoundW", "Str", SOUND_ENG_FILE, "Ptr", 0, "UInt", flags)
+            soundFile := SOUND_ENG_FILE
         else if (langId = ID_RUS && SOUND_RUS_FILE != "")
-            DllCall("winmm\PlaySoundW", "Str", SOUND_RUS_FILE, "Ptr", 0, "UInt", flags)
+            soundFile := SOUND_RUS_FILE
         else if (langId = ID_UKR && SOUND_UKR_FILE != "")
-            DllCall("winmm\PlaySoundW", "Str", SOUND_UKR_FILE, "Ptr", 0, "UInt", flags)
+            soundFile := SOUND_UKR_FILE
+
+        if (soundFile != "" && FileExist(soundFile))
+            DllCall("winmm\PlaySoundW", "Str", soundFile, "Ptr", 0, "UInt", 0x00020003)
     }
 
     lastLang := langId
@@ -666,7 +669,6 @@ GetAbsolutePath(path) {
     if (FileExist(path)) {
         return path
     }
-    LogMessage(A_ScriptDir . "\" . path)
     return A_ScriptDir . "\" . path
 }
 
