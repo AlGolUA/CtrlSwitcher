@@ -9,6 +9,9 @@ global ID_ENG := 0x0409
 global ID_RUS := 0x0419
 global ID_UKR := 0x0422
 
+global LCTRL_LAYOUT := ID_RUS
+global RCTRL_LAYOUT := ID_UKR
+
 ; Внутреннее состояние языка в памяти скрипта
 global currentLayoutState := ID_ENG
 global loggingEnabled := false
@@ -235,8 +238,7 @@ Pause::
     {
         if (!IsNoSLProcess())
             UpdateStateFromSystem()
-
-        currentLayoutState := (currentLayoutState = ID_RUS) ? ID_ENG : ID_RUS
+        currentLayoutState := (currentLayoutState = LCTRL_LAYOUT) ? ID_ENG : LCTRL_LAYOUT
         LogMessage("Switch language by LCtrlUp to " . currentLayoutState)
         SwitchLanguageUniversal(currentLayoutState)
     }
@@ -254,7 +256,7 @@ Pause::
         if (!IsNoSLProcess())
             UpdateStateFromSystem()
 
-        currentLayoutState := (currentLayoutState = ID_UKR) ? ID_ENG : ID_UKR
+        currentLayoutState := (currentLayoutState = RCTRL_LAYOUT) ? ID_ENG : RCTRL_LAYOUT
         LogMessage("Switch language by RCtrlUp to " . currentLayoutState)
         SwitchLanguageUniversal(currentLayoutState)
     }
@@ -289,6 +291,24 @@ LogMessage(text) {
 }
 
 ; --- ФУНКЦИИ ---
+IsLanguageInstalled(langId) {
+    layoutCount := DllCall("GetKeyboardLayoutList", "Int", 0, "Ptr", 0, "Int")
+    if (layoutCount <= 0)
+        return false
+
+    layouts := Buffer(layoutCount * A_PtrSize)
+    layoutCount := DllCall("GetKeyboardLayoutList", "Int", layoutCount, "Ptr", layouts, "Int")
+
+    Loop layoutCount {
+        layout := NumGet(layouts, (A_Index - 1) * A_PtrSize, "Ptr")
+
+        if ((layout & 0xFFFF) = langId)
+            return true
+    }
+
+    return false
+}
+
 GetInputWindow()
 {
     targetWin := WinExist("A")
@@ -678,6 +698,7 @@ InitSettings()
     global SOUND_ENG_FILE, SOUND_RUS_FILE, SOUND_UKR_FILE
     global SOUND_ENG_KEY_FILE, SOUND_RUS_KEY_FILE, SOUND_UKR_KEY_FILE
     global INDICATOR_FONT_SIZE, BORDER_THICKNESS, BORDER_SIDES
+    global LCTRL_LAYOUT, RCTRL_LAYOUT
 
     if not FileExist(INI_FILE)
     {
@@ -756,4 +777,8 @@ InitSettings()
             }
         }
     }
+    if (!IsLanguageInstalled(ID_RUS) && IsLanguageInstalled(ID_UKR))
+        LCTRL_LAYOUT := ID_UKR
+    if (!IsLanguageInstalled(ID_UKR) && IsLanguageInstalled(ID_RUS))
+        RCTRL_LAYOUT := ID_RUS
 }
