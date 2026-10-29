@@ -1,4 +1,7 @@
-﻿#Requires AutoHotkey v2.0
+﻿;@Ahk2Exe-AddResource icons\en.ico, 201
+;@Ahk2Exe-AddResource icons\ru.ico, 202
+;@Ahk2Exe-AddResource icons\uk.ico, 203
+#Requires AutoHotkey v2.0
 #SingleInstance Force
 
 ; Путь к файлу настроек в той же папке, где и скрипт/exe
@@ -34,6 +37,9 @@ global borderGuis := []
 
 ; Инициализируем настройки из INI
 InitSettings()
+A_TrayMenu.Add("Звук", ToggleSound)
+if ENABLE_SOUND
+    A_TrayMenu.Check("Звук")
 
 ; --- ИНИЦИАЛИЗАЦИЯ ДИНАМИЧЕСКИХ ТЕКСТОВЫХ ИНДИКАТОРОВ ДЛЯ ВСЕХ МОНИТОРОВ ---
 monitorCount := MonitorGetCount()
@@ -276,11 +282,7 @@ Pause::
 }
 
 ; Переключение вывода звука
-^!+s::
-{
-    global ENABLE_SOUND
-    ENABLE_SOUND := !ENABLE_SOUND
-}
+^!+s::ToggleSound()
 
 LogMessage(text) {
     global loggingEnabled
@@ -291,6 +293,35 @@ LogMessage(text) {
 }
 
 ; --- ФУНКЦИИ ---
+SetLayoutTrayIcon(layout) {
+    switch layout {
+        case ID_ENG:
+            name := "en", resourceId := 201
+        case ID_RUS:
+            name := "ru", resourceId := 202
+        case ID_UKR:
+            name := "uk", resourceId := 203
+        default:
+            return
+    }
+
+    if A_IsCompiled
+        TraySetIcon(A_ScriptFullPath, -resourceId)
+    else
+        TraySetIcon(A_ScriptDir "\icons\" name ".ico")
+}
+
+ToggleSound(*) {
+    global ENABLE_SOUND
+    ENABLE_SOUND := !ENABLE_SOUND
+    if ENABLE_SOUND
+        A_TrayMenu.Check("Звук")
+    else
+        A_TrayMenu.Uncheck("Звук")
+    IniWrite(ENABLE_SOUND ? "true" : "false",
+        INI_FILE, "General", "EnableSound")
+}
+
 IsLanguageInstalled(langId) {
     layoutCount := DllCall("GetKeyboardLayoutList", "Int", 0, "Ptr", 0, "Int")
     if (layoutCount <= 0)
@@ -650,6 +681,7 @@ DrawLanguage(langId)
             DllCall("winmm\PlaySoundW", "Str", soundFile, "Ptr", 0, "UInt", 0x00020003)
     }
 
+    SetLayoutTrayIcon(langId)
     lastLang := langId
     lastWasExcluded := currentExcluded
 
