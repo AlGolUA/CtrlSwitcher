@@ -18,9 +18,6 @@ global RCTRL_LAYOUT := ID_UKR
 ; Внутреннее состояние языка в памяти скрипта
 global currentLayoutState := ID_ENG
 global loggingEnabled := false
-; Кэш проверки исключений для последнего активного приложения.
-global lastActiveProcess := ""
-global lastActiveProcessExcluded := false
 
 ; Последнее слово и введенные после него разделители.
 global charBuffer := ""
@@ -37,9 +34,14 @@ global borderGuis := []
 
 ; Инициализируем настройки из INI
 InitSettings()
-A_TrayMenu.Add("Звук", ToggleSound)
+A_TrayMenu.Insert("1&", "Color", ToggleColor)
+A_TrayMenu.Insert("2&", "Sound", ToggleSound)
+A_TrayMenu.Insert("3&")
 if ENABLE_SOUND
-    A_TrayMenu.Check("Звук")
+    A_TrayMenu.Check("Sound")
+if ENABLE_COLOR
+    A_TrayMenu.Check("Color")
+
 
 ; --- ИНИЦИАЛИЗАЦИЯ ДИНАМИЧЕСКИХ ТЕКСТОВЫХ ИНДИКАТОРОВ ДЛЯ ВСЕХ МОНИТОРОВ ---
 monitorCount := MonitorGetCount()
@@ -242,8 +244,7 @@ Pause::
 
     if (duration > 0 && duration < 300 && A_PriorKey = "LControl")
     {
-        if (!IsNoSLProcess())
-            UpdateStateFromSystem()
+        UpdateStateFromSystem()
         currentLayoutState := (currentLayoutState = LCTRL_LAYOUT) ? ID_ENG : LCTRL_LAYOUT
         LogMessage("Switch language by LCtrlUp to " . currentLayoutState)
         SwitchLanguageUniversal(currentLayoutState)
@@ -259,9 +260,7 @@ Pause::
 
     if (duration > 0 && duration < 300 && A_PriorKey = "RControl")
     {
-        if (!IsNoSLProcess())
-            UpdateStateFromSystem()
-
+        UpdateStateFromSystem()
         currentLayoutState := (currentLayoutState = RCTRL_LAYOUT) ? ID_ENG : RCTRL_LAYOUT
         LogMessage("Switch language by RCtrlUp to " . currentLayoutState)
         SwitchLanguageUniversal(currentLayoutState)
@@ -270,19 +269,11 @@ Pause::
 #HotIf
 
 ; Переключение логирования доступно также в исключенных приложениях.
-^!+l::
-{
-    global loggingEnabled, lastActiveProcess
-    loggingEnabled := !loggingEnabled
-    ToolTip(loggingEnabled ? "Logging..." : "")
-    if (loggingEnabled) {
-      lastActiveProcess := ""
-      IsActiveProcessExcluded()
-    }
-}
-
+^!+l::ToggleLogging()
 ; Переключение вывода звука
 ^!+s::ToggleSound()
+; Переключение вывода цветовых индикаторов
+^!+c::ToggleColor()
 
 LogMessage(text) {
     global loggingEnabled
@@ -311,15 +302,33 @@ SetLayoutTrayIcon(layout) {
         TraySetIcon(A_ScriptDir "\icons\" name ".ico")
 }
 
+ToggleLogging(*)
+{
+    global loggingEnabled
+    loggingEnabled := !loggingEnabled
+    ToolTip(loggingEnabled ? "Logging..." : "")
+}
+
 ToggleSound(*) {
     global ENABLE_SOUND
     ENABLE_SOUND := !ENABLE_SOUND
     if ENABLE_SOUND
-        A_TrayMenu.Check("Звук")
+        A_TrayMenu.Check("Sound")
     else
-        A_TrayMenu.Uncheck("Звук")
+        A_TrayMenu.Uncheck("Sound")
     IniWrite(ENABLE_SOUND ? "true" : "false",
         INI_FILE, "General", "EnableSound")
+}
+
+ToggleColor(*) {
+    global ENABLE_COLOR
+    ENABLE_COLOR := !ENABLE_COLOR
+    if ENABLE_COLOR
+        A_TrayMenu.Check("Color")
+    else
+        A_TrayMenu.Uncheck("Color")
+    IniWrite(ENABLE_COLOR ? "true" : "false",
+        INI_FILE, "General", "EnableColor")
 }
 
 IsLanguageInstalled(langId) {
@@ -390,8 +399,7 @@ SwitchLanguageUniversal(targetLangId)
             "Ptr*", &result, "Ptr")
         LogMessage("SwitchLanguageUniversal: hwnd=" . targetWin . " HKL=" . targetLayout . " delivered=" . delivered)
 
-        if (!IsNoSLProcess())
-            UpdateStateFromSystem()
+        UpdateStateFromSystem()
     }
 
     ; Обновляем текстовый индикатор (RU/UA) в углу экрана
@@ -402,6 +410,9 @@ SwitchLanguageUniversal(targetLangId)
 UpdateStateFromSystem()
 {
     global currentLayoutState
+    if (IsNoSLProcess())
+        return
+
     try {
         targetWin := GetInputWindow()
         if targetWin {
@@ -419,23 +430,12 @@ UpdateStateFromSystem()
 SyncLanguages()
 {
     global currentLayoutState, textGuis, borderGuis
-    ; LogMessage("SyncLanguages.  currentLayoutState = " . currentLayoutState)
-
-    if (!IsNoSLProcess())
-        UpdateStateFromSystem()
-
-    ; ИСПРАВЛЕНО: Каждые 200 мс принудительно возвращаем окна на самый верхний слой (TopMost),
-    ; если они сейчас не спрятаны под экран (то есть мы не в исключении)
+    UpdateStateFromSystem()
     if (!IsActiveProcessExcluded())
     {
+        ; Эти вызовы WinAPI возвращает окна на самый верх без мерцания и потери фокуса ввода
         for g in textGuis
-        {
-            ; Этот вызов WinAPI возвращает окно на самый верх без мерцания и потери фокуса ввода
             DllCall("User32\SetWindowPos", "Ptr", g.hwnd.Hwnd, "Ptr", -1, "Int", 0, "Int", 0, "Int", 0, "Int", 0, "UInt", 0x0013)
-        }
-    }
-
-    if (!IsActiveProcessExcluded()) {
         for g in borderGuis
             DllCall("User32\SetWindowPos", "Ptr", g.hwnd.Hwnd, "Ptr", -1, "Int", 0, "Int", 0, "Int", 0, "Int", 0, "UInt", 0x0013)
     }
@@ -445,28 +445,45 @@ SyncLanguages()
 IsNoSLProcess()
 {
     global NoSLProcesses
+    ; Кэширование
+    static lastActiveProc := ""
+    static lastNoSL := false
+
     try {
         activeProcess := StrLower(WinGetProcessName("A"))
+        ; Быстрый выход, если тот же процесс
+        if (!loggingEnabled && activeProcess = lastActiveProc)
+            return lastNoSL
+        isNoSL := false
         for exeName in NoSLProcesses {
             if (activeProcess = exeName)
-                return true
+                isNoSL := true
         }
+        LogMessage("ActiveProcess: " . activeProcess . " isNoSL: " . isNoSL)
+        ; Кешируем
+        lastActiveProc := activeProcess
+        lastNoSL := isNoSL
+        return lastNoSL
     } catch {
+        lastActiveProc := ""
+        lastNoSL := false
         return false
     }
-    return false
 }
 
 IsActiveProcessExcluded()
 {
-    global ExcludedProcesses, lastActiveProcess, lastActiveProcessExcluded
+    global ExcludedProcesses, loggingEnabled
+    ; Кэширование
+    static lastActiveProcess := ""
+    static lastActiveProcessExcluded := false
+
     try {
         activeProcess := StrLower(WinGetProcessName("A"))
-            ; Быстрый выход, если тот же процесс
-        if (activeProcess = lastActiveProcess)
+        ; Быстрый выход, если тот же процесс
+        if (!loggingEnabled && activeProcess = lastActiveProcess)
             return lastActiveProcessExcluded
 
-        LogMessage("ActiveProcess: " . activeProcess)
         isExcluded := (WinGetClass("A") = "TscShellContainerClass")
         if (!isExcluded) {
             for exeName in ExcludedProcesses {
@@ -476,6 +493,7 @@ IsActiveProcessExcluded()
                 }
             }
         }
+        LogMessage("ActiveProcess: " . activeProcess . " excluded: " . isExcluded)
         ; Кешируем
         lastActiveProcess := activeProcess
         lastActiveProcessExcluded := isExcluded
@@ -506,8 +524,7 @@ PlayLetterSound(char)
         return
 
     ; Учитываем смену окна или раскладки до очередного опроса таймера.
-    if (!IsNoSLProcess())
-        UpdateStateFromSystem()
+    UpdateStateFromSystem()
 
     soundFile := ""
     if (currentLayoutState = ID_ENG && RegExMatch(char, "i)^[a-z]$"))
@@ -608,9 +625,7 @@ HideLanguages()
 {
     global textGuis, borderGuis
     for g in textGuis
-    {
         g.hwnd.Hide()
-    }
     for g in borderGuis
         g.hwnd.Hide()
 }
@@ -642,11 +657,11 @@ DrawLanguage(langId)
 {
     static lastLang := 0
     static lastWasExcluded := false
-    global textGuis, textControls, SOUND_ENG_FILE, SOUND_RUS_FILE, SOUND_UKR_FILE
+    static lastColorEnabled := -1
+    global textGuis, textControls, SOUND_ENG_FILE, SOUND_RUS_FILE, SOUND_UKR_FILE, ENABLE_COLOR
 
-    if (langId != lastLang) {
+    if (langId != lastLang)
         LogMessage("Switch language from " . lastLang . " to " . langId)
-    }
 
     color := 0
     labelText := ""
@@ -664,7 +679,7 @@ DrawLanguage(langId)
 
     currentExcluded := IsActiveProcessExcluded()
 
-    if (langId = lastLang && currentExcluded = lastWasExcluded)
+    if (langId = lastLang && currentExcluded = lastWasExcluded && ENABLE_COLOR = lastColorEnabled)
         return
 
     if (ENABLE_SOUND && langId != lastLang)
@@ -682,8 +697,12 @@ DrawLanguage(langId)
     }
 
     SetLayoutTrayIcon(langId)
+    lastColorEnabled := ENABLE_COLOR
     lastLang := langId
     lastWasExcluded := currentExcluded
+
+    if (!ENABLE_COLOR)
+          color := 0
 
     if (color = 0 || currentExcluded)
     {
@@ -726,7 +745,7 @@ GetAbsolutePath(path) {
 
 InitSettings()
 {
-    global ENABLE_SOUND, COLOR_RUS, COLOR_UKR, COLOR_ENG, ExcludedProcesses, NoSLProcesses, HotstringsObj
+    global ENABLE_SOUND, ENABLE_COLOR, COLOR_RUS, COLOR_UKR, COLOR_ENG, ExcludedProcesses, NoSLProcesses, HotstringsObj
     global SOUND_ENG_FILE, SOUND_RUS_FILE, SOUND_UKR_FILE
     global SOUND_ENG_KEY_FILE, SOUND_RUS_KEY_FILE, SOUND_UKR_KEY_FILE
     global INDICATOR_FONT_SIZE, BORDER_THICKNESS, BORDER_SIDES
@@ -735,6 +754,7 @@ InitSettings()
     if not FileExist(INI_FILE)
     {
         IniWrite("true", INI_FILE, "General", "EnableSound")
+        IniWrite("true", INI_FILE, "General", "EnableColor")
         IniWrite("2", INI_FILE, "General", "IndicatorSize")
         IniWrite("3", INI_FILE, "General", "BorderThickness")
         IniWrite("NESW", INI_FILE, "General", "BorderSides")
@@ -755,6 +775,7 @@ InitSettings()
     }
 
     ENABLE_SOUND := (IniRead(INI_FILE, "General", "EnableSound", "true") = "true")
+    ENABLE_COLOR := (IniRead(INI_FILE, "General", "EnableColor", "true") = "true")
 
     ; Толщина в пикселях; 0 отключает рамку. Стороны: верх, право, низ, лево.
     BORDER_THICKNESS := Max(0, Integer(IniRead(INI_FILE, "General", "BorderThickness", "3")))
@@ -809,6 +830,7 @@ InitSettings()
             }
         }
     }
+    ; Если в системе не установлен русский или украинский, то используем для обеих CTRL то, что есть
     if (!IsLanguageInstalled(ID_RUS) && IsLanguageInstalled(ID_UKR))
         LCTRL_LAYOUT := ID_UKR
     if (!IsLanguageInstalled(ID_UKR) && IsLanguageInstalled(ID_RUS))
